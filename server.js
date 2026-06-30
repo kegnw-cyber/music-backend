@@ -4,18 +4,20 @@ const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
 const axios = require('axios');
 require('dotenv').config();
-console.log('ВЕРСИЯ 2.0 — С ЭНДПОИНТАМИ');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Подключение к Supabase
+// ===== ПОДКЛЮЧЕНИЕ К SUPABASE =====
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// ===== ПОИСК НА YOUTUBE =====
+// =====================================================
+// 1. ПОИСК НА YOUTUBE
+// =====================================================
 async function searchYouTube(query) {
   return new Promise((resolve) => {
     exec(`yt-dlp "ytsearch10:${query}" --flat-playlist --dump-json`, (error, stdout) => {
@@ -41,7 +43,9 @@ async function searchYouTube(query) {
   });
 }
 
-// ===== ПОИСК НА SOUNDCLOUD =====
+// =====================================================
+// 2. ПОИСК НА SOUNDCLOUD
+// =====================================================
 async function searchSoundCloud(query) {
   try {
     const response = await axios.get(
@@ -56,14 +60,18 @@ async function searchSoundCloud(query) {
       duration: Math.floor(item.duration / 1000) || 0,
       cover: item.artwork_url || item.user.avatar_url || '',
       url: item.permalink_url,
-      source: 'soundcloud'
+      source: 'soundcloud',
+      // Сохраняем ссылку для стрима, если есть
+      streamUrl: item.media?.transcodings?.[0]?.url || null
     }));
   } catch {
     return [];
   }
 }
 
-// ===== ПОИСК НА DEEZER =====
+// =====================================================
+// 3. ПОИСК НА DEEZER
+// =====================================================
 async function searchDeezer(query) {
   try {
     const response = await axios.get(
@@ -76,7 +84,7 @@ async function searchDeezer(query) {
       artist: item.artist.name,
       duration: item.duration || 0,
       cover: item.album.cover_medium || '',
-      url: item.link,
+      url: item.preview || '', // Прямая ссылка на аудио (preview)
       source: 'deezer'
     }));
   } catch {
@@ -84,17 +92,16 @@ async function searchDeezer(query) {
   }
 }
 
-// ===== ОБЩИЙ ПОИСК =====
+// =====================================================
+// 4. ОБЩИЙ ПОИСК
+// =====================================================
 async function searchAll(query) {
-  const [youtube, soundcloud, deezer] = await Promise.all([
-    searchYouTube(query),
-    searchSoundCloud(query),
-    searchDeezer(query)
-  ]);
-  return [...youtube, ...soundcloud, ...deezer].slice(0, 30);
+  return await searchYouTube(query);
 }
 
-// ===== СТАНЦИИ =====
+// =====================================================
+// 5. СТАНЦИИ
+// =====================================================
 const MOODS = {
   'энергичный': ['energetic', 'upbeat', 'dance'],
   'спокойный': ['chill', 'ambient', 'lofi'],
@@ -109,89 +116,184 @@ async function getStation(mood) {
   return await searchAll(keywords.join(' '));
 }
 
-// ===== ЭНДПОИНТЫ API =====
+// =====================================================
+// 6. ЭНДПОИНТЫ
+// =====================================================
+
+// Корень
+app.get('/', (req, res) => {
+  res.json({ status: 'OK', message: 'Сервер работает! 🎵' });
+});
 
 // Поиск
 app.get('/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json({ results: [] });
-  const results = await searchAll(q);
-  res.json({ results });
+  try {
+    const results = await searchAll(q);
+    res.json({ results });
+  } catch (error) {
+    console.error('Ошибка поиска:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Станции
 app.get('/station', async (req, res) => {
   const { mood } = req.query;
-  const tracks = await getStation(mood || 'спокойный');
-  res.json({ tracks, mood: mood || 'спокойный' });
+  try {
+    const tracks = await getStation(mood || 'спокойный');
+    res.json({ tracks, mood: mood || 'спокойный' });
+  } catch (error) {
+    console.error('Ошибка станции:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Библиотека
 app.get('/library/:userId', async (req, res) => {
   const { userId } = req.params;
-  const [likes, history, playlists] = await Promise.all([
-    supabase.from('likes').select('track_id, track_data').eq('user_id', userId),
-    supabase.from('history').select('track_data').eq('user_id', userId).order('played_at', { ascending: false }).limit(50),
-    supabase.from('playlists').select('*').eq('user_id', userId)
-  ]);
-  res.json({
-    likes: likes.data || [],
-    history: history.data || [],
-    playlists: playlists.data || []
-  });
+  try {
+    const [likes, history, playlists] = await Promise.all([
+      supabase.from('likes').select('track_id, track_data').eq('user_id', userId),
+      supabase.from('history').select('track_data').eq('user_id', userId).order('played_at', { ascending: false }).limit(50),
+      supabase.from('playlists').select('*').eq('user_id', userId)
+    ]);
+    res.json({
+      likes: likes.data || [],
+      history: history.data || [],
+      playlists: playlists.data || []
+    });
+  } catch (error) {
+    console.error('Ошибка библиотеки:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Лайк
 app.post('/like', async (req, res) => {
   const { userId, trackId, trackData } = req.body;
-  await supabase
-    .from('likes')
-    .upsert({ user_id: userId, track_id: trackId, track_data: trackData, liked_at: new Date().toISOString() },
-      { onConflict: 'user_id, track_id' }
-    );
-  res.json({ success: true });
+  try {
+    await supabase
+      .from('likes')
+      .upsert({ user_id: userId, track_id: trackId, track_data: trackData, liked_at: new Date().toISOString() },
+        { onConflict: 'user_id, track_id' }
+      );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка лайка:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Убрать лайк
 app.delete('/like', async (req, res) => {
   const { userId, trackId } = req.body;
-  await supabase.from('likes').delete().eq('user_id', userId).eq('track_id', trackId);
-  res.json({ success: true });
+  try {
+    await supabase.from('likes').delete().eq('user_id', userId).eq('track_id', trackId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка удаления лайка:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // История
 app.post('/history', async (req, res) => {
   const { userId, trackData } = req.body;
-  await supabase.from('history').insert({ user_id: userId, track_data: trackData, played_at: new Date().toISOString() });
-  res.json({ success: true });
+  try {
+    await supabase.from('history').insert({ user_id: userId, track_data: trackData, played_at: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка истории:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Создать плейлист
+// Плейлисты (CRUD)
 app.post('/playlist', async (req, res) => {
   const { userId, name, tracks } = req.body;
-  const { data } = await supabase
-    .from('playlists')
-    .insert({ user_id: userId, name, tracks: tracks || [] })
-    .select()
-    .single();
-  res.json(data);
+  try {
+    const { data } = await supabase
+      .from('playlists')
+      .insert({ user_id: userId, name, tracks: tracks || [] })
+      .select()
+      .single();
+    res.json(data);
+  } catch (error) {
+    console.error('Ошибка создания плейлиста:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Обновить плейлист
 app.put('/playlist/:id', async (req, res) => {
   const { id } = req.params;
   const { name, tracks } = req.body;
-  await supabase.from('playlists').update({ name, tracks }).eq('id', id);
-  res.json({ success: true });
+  try {
+    await supabase.from('playlists').update({ name, tracks }).eq('id', id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка обновления плейлиста:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Удалить плейлист
 app.delete('/playlist/:id', async (req, res) => {
   const { id } = req.params;
-  await supabase.from('playlists').delete().eq('id', id);
-  res.json({ success: true });
+  try {
+    await supabase.from('playlists').delete().eq('id', id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Ошибка удаления плейлиста:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
+// ===== АУДИО-ПОТОК (для плеера) =====
+app.get('/stream', async (req, res) => {
+  const { url, source } = req.query;
+  if (!url) return res.status(400).json({ error: 'No URL provided' });
+
+  try {
+    if (source === 'youtube') {
+      // Получаем прямую ссылку на аудио через yt-dlp
+      exec(`yt-dlp -g -f bestaudio ${url}`, (error, stdout) => {
+        if (error) {
+          console.error('yt-dlp error:', error);
+          return res.status(500).json({ error: 'Failed to get stream' });
+        }
+        const streamUrl = stdout.trim();
+        res.json({ streamUrl });
+      });
+    } else if (source === 'deezer') {
+      // Deezer: используем preview (уже есть в данных)
+      res.json({ streamUrl: url });
+    } else if (source === 'soundcloud') {
+      // SoundCloud: пробуем получить прямой поток (если есть)
+      // В большинстве случаев требует авторизации, поэтому пока отдаём ссылку на страницу
+      // Для простоты используем тот же подход, что и для YouTube (через yt-dlp)
+      exec(`yt-dlp -g -f bestaudio ${url}`, (error, stdout) => {
+        if (error) {
+          console.error('yt-dlp error for SoundCloud:', error);
+          return res.status(500).json({ error: 'Failed to get stream' });
+        }
+        const streamUrl = stdout.trim();
+        res.json({ streamUrl });
+      });
+    } else {
+      res.status(400).json({ error: 'Unsupported source' });
+    }
+  } catch (error) {
+    console.error('Stream error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =====================================================
+// 7. ЗАПУСК
+// =====================================================
 const PORT = process.env.PORT || 3000;
-console.log('✅ Сервер обновлён!');
-app.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));  
+app.listen(PORT, () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`📡 Проверьте: http://localhost:${PORT}`);
+});
