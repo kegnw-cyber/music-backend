@@ -4,7 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
 const axios = require('axios');
 require('dotenv').config();
-
+console.log('ВЕРСИЯ 2.0 — С ЭНДПОИНТАМИ');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -193,4 +193,5 @@ app.delete('/playlist/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));
+console.log('✅ Сервер обновлён!');
+app.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));  
