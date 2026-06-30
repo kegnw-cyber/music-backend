@@ -1,7 +1,7 @@
-{{
+{
   "name": "soundclub",
   "version": "1.0.0",
-  "description": "",
+  "description": "Музыкальный плеер с поиском на YouTube",
   "main": "main.js",
   "scripts": {
     "start": "node server.js",
